@@ -2,3 +2,5 @@ notebook/.ipynb_checkpoints
 scope.log
 page.html
 *.jsonl
+*.json
+data
