@@ -273,9 +273,9 @@ def make_driver():
 
 if __name__ == "__main__":
     base_dir ="../data/agmarknet"
-    start = "2025-08-11"
-    end = "2025-08-20"
-    RECYCLE_EVERY = 10
+    start = "2025-07-01"
+    end = "2025-07-31"
+    RECYCLE_EVERY = 50
 
     iterate_date_and_scrape(start, end, base_dir, RECYCLE_EVERY)
 
