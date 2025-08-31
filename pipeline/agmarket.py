@@ -129,7 +129,7 @@ def read_range(dates, base_dir="data/commodities") -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def scrape_table_to_df( driver, url: str, css_selector: str = "table.tableagmark_new", wait_seconds: int = 30,
+def scrape_table_to_df( driver, url: str, css_selector: str = "table.tableagmark_new", wait_seconds: int = 2,
 ) -> pd.DataFrame:
     """
     Navigate to `url`, wait for table with `css_selector`, parse to DataFrame, rename columns,
@@ -154,8 +154,8 @@ def scrape_table_to_df( driver, url: str, css_selector: str = "table.tableagmark
 def iterate_commodity_and_scrape(
     start_date: str,
     end_date: str,
-    RECYCLE_EVERY = 10,
-    wait_seconds = 30
+    RECYCLE_EVERY = 100,
+    wait_seconds = 2
 ) -> pd.DataFrame:
     """
     Iterate from start_date to end_date (inclusive), call `scrape_table_to_df` for each date,
@@ -216,8 +216,8 @@ def iterate_date_and_scrape(
     start_date: str,
     end_date: str,
     base_dir: str,
-    RECYCLE_EVERY = 10,
-    per_request_sleep: float = 1.0
+    RECYCLE_EVERY = 100,
+    per_request_sleep: float = 0.5
 ) -> pd.DataFrame:
     """
     For each day in [start, end], call iterate_commodity_and_scrape(driver, day, day),
@@ -266,16 +266,16 @@ def make_driver():
         "profile.managed_default_content_settings.images": 2
     })
     driver = webdriver.Chrome(options=opts)  # Selenium Manager auto-resolves driver
-    driver.set_page_load_timeout(30)
-    driver.set_script_timeout(30)
+    driver.set_page_load_timeout(5)
+    driver.set_script_timeout(5)
     return driver
 
 
 if __name__ == "__main__":
     base_dir ="../data/agmarknet"
-    start = "2025-07-01"
-    end = "2025-07-31"
-    RECYCLE_EVERY = 50
+    start = "2025-02-01"
+    end = "2025-02-28"
+    RECYCLE_EVERY = 100
 
     iterate_date_and_scrape(start, end, base_dir, RECYCLE_EVERY)
 
