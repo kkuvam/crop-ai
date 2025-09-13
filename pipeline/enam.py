@@ -13,7 +13,6 @@ headers = {
     "Content-Type": "application/x-www-form-urlencoded"
 }
 
-
 def get_states():
     url = "https://enam.gov.in/web/ajax_ctrl/states_name"
     response = requests.get(url)
@@ -92,7 +91,7 @@ def get_trade_data(date_str: str) -> list:
     return response.json()['data']
 
 
-def get_trade_data_range(start_date: str, end_date: str, jsonl_path: str) -> list:
+def get_trade_date_range(start_date: str, end_date: str, jsonl_path: str) -> list:
     all_data = []
     for d in date_range(start_date, end_date):
         dt = datetime.strptime(d, "%Y-%m-%d")
@@ -111,6 +110,6 @@ def get_trade_data_range(start_date: str, end_date: str, jsonl_path: str) -> lis
 
 if __name__ == "__main__":
     output_location = "../data/enam/"
-    start_date = "2023-01-01"
-    end_date = "2023-01-31"
+    start_date = "2025-01-01"
+    end_date = "2025-12-31"
     trade_data_list = get_trade_data_range(start_date, end_date, output_location)
