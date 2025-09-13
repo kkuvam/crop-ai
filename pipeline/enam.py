@@ -91,7 +91,7 @@ def get_trade_data(date_str: str) -> list:
     return response.json()['data']
 
 
-def get_trade_date_range(start_date: str, end_date: str, jsonl_path: str) -> list:
+def get_trade_data_range(start_date: str, end_date: str, jsonl_path: str) -> list:
     all_data = []
     for d in date_range(start_date, end_date):
         dt = datetime.strptime(d, "%Y-%m-%d")

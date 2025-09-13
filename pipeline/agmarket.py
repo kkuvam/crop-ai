@@ -7,7 +7,6 @@ import requests
 from bs4 import BeautifulSoup
 import gzip, json
 from pathlib import Path
-from io import StringIO
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -273,8 +272,8 @@ def make_driver():
 
 if __name__ == "__main__":
     base_dir ="../data/agmarknet"
-    start = "2025-02-01"
-    end = "2025-02-28"
+    start = "2024-01-01"
+    end = "2024-12-31"
     RECYCLE_EVERY = 100
 
     iterate_date_and_scrape(start, end, base_dir, RECYCLE_EVERY)
