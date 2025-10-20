@@ -88,7 +88,12 @@ def get_trade_data(date_str: str) -> list:
     payload["fromDate"] = date_str
     payload["toDate"] = date_str
     response = requests.post(url, data=payload, headers=headers)
-    return response.json()['data']
+    response = response.json()
+    if "data" in response:
+        return response["data"]
+    else:
+        print("No 'data' field found in response:", response)
+        return None
 
 
 def get_trade_data_range(start_date: str, end_date: str, jsonl_path: str) -> list:
@@ -104,12 +109,13 @@ def get_trade_data_range(start_date: str, end_date: str, jsonl_path: str) -> lis
         out_path.parent.mkdir(parents=True, exist_ok=True)
         print(f"Processing for date: {date_str}")
         save_jsonl_gz(data, out_path)
-        all_data.extend(data)
+        if data:  # checks if data exists and is not empty/None
+            all_data.extend(data)
     return all_data
 
 
 if __name__ == "__main__":
     output_location = "../data/enam/"
-    start_date = "2025-01-01"
-    end_date = "2025-12-31"
+    start_date = "2011-01-01"
+    end_date = "2019-12-31"
     trade_data_list = get_trade_data_range(start_date, end_date, output_location)
