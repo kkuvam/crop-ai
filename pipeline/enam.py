@@ -116,6 +116,6 @@ def get_trade_data_range(start_date: str, end_date: str, jsonl_path: str) -> lis
 
 if __name__ == "__main__":
     output_location = "../data/enam/"
-    start_date = "2011-01-01"
-    end_date = "2019-12-31"
+    start_date = "2025-06-01"
+    end_date = "2025-10-31"
     trade_data_list = get_trade_data_range(start_date, end_date, output_location)
