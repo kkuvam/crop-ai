@@ -8,6 +8,9 @@ from bs4 import BeautifulSoup
 import gzip, json
 from pathlib import Path
 from io import StringIO
+import hashlib
+from pathlib import Path
+
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -110,6 +113,31 @@ def save_jsonl_gz(df: pd.DataFrame, jsonl_path: str) -> None:
         df.to_json(f, orient="records", lines=True, force_ascii=False)
 
 
+def load_url_cache(cache_file: Path) -> set:
+    """
+    Load cached URLs from a plain text file (one URL per line) into a set.
+    Returns an empty set if file doesn't exist.
+    """
+    if not cache_file.exists():
+        return set()
+    with cache_file.open("r", encoding="utf-8") as f:
+        lines = [line.strip() for line in f if line.strip()]
+    return set(lines)
+
+
+def append_url_cache(cache_file: Path, url: str, memory_cache: set) -> None:
+    """
+    Append a URL to the cache file and add it to the in-memory set.
+    Avoid duplicate writes if memory_cache already contains the URL.
+    """
+    if url in memory_cache:
+        return
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    with cache_file.open("a", encoding="utf-8") as f:
+        f.write(url + "\n")
+    memory_cache.add(url)
+
+
 def read_range(dates, base_dir="data/commodities") -> pd.DataFrame:
     """
     Read multiple date-partitioned JSONL.GZ files into a single DataFrame.
@@ -154,24 +182,23 @@ def scrape_table_to_df( driver, url: str, css_selector: str = "table.tableagmark
 def iterate_commodity_and_scrape(
     start_date: str,
     end_date: str,
+    base_dir: str,
+    cache_set: set,
+    cache_file: Path,
     RECYCLE_EVERY = 100,
     wait_seconds = 2
-) -> pd.DataFrame:
+) -> bool:
     """
-    Iterate from start_date to end_date (inclusive), call `scrape_table_to_df` for each date,
-    and return a concatenated DataFrame.
+    Iterate from start_date to end_date (inclusive), call `scrape_table_to_df` for each date+commodity,
+    and write per-day outputs to base_dir/year/month/date.jsonl.gz.
 
-    Parameters:
-      - driver
-      - start_date/end_date: strings parsable by datetime.fromisoformat or strptime; use YYYY-MM-DD recommended
-      - date_format_in_url: how {date} should be formatted inside the URL (default "dd-mm-YYYY")
+    Uses `cache_set` and `cache_file` to skip already scraped URLs.
     """
     
     
     d0 = to_date(start_date)
     d1 = to_date(end_date)
 
-    all_dfs: List[pd.DataFrame] = []
     driver = make_driver()
     count = 0
 
@@ -180,7 +207,7 @@ def iterate_commodity_and_scrape(
         date_str = current.strftime("%Y-%m-%d")
         year_str = current.strftime("%Y") 
         month_str = current.strftime("%b") 
-        # Per-day output path: base_dir/date=YYYY-MM-DD/part-000.jsonl.gz
+        # Per-day output path: base_dir/year/month/YYYY-MM-DD.jsonl.gz
         day_dir = Path(base_dir)
         out_path = out_path = day_dir / year_str / month_str / f"{date_str}.jsonl.gz"
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,6 +215,10 @@ def iterate_commodity_and_scrape(
         commodities = get_commodities()
         for commodity in commodities:
             url = build_url(commodity, date_str, date_str)
+            # Check memory file cache BEFORE firing the browser request
+            if url in cache_set:
+                print(f"[CACHE] Skipping (already cached): {url}")
+                continue
             try:
                 # Recycle proactively
                 if count > 0 and count % RECYCLE_EVERY == 0:
@@ -208,7 +239,11 @@ def iterate_commodity_and_scrape(
 
         current += timedelta(days=1)
 
-    driver.quit()
+    try:
+        driver.quit()
+    except:
+        pass
+    
     return True
 
 
@@ -218,32 +253,26 @@ def iterate_date_and_scrape(
     base_dir: str,
     RECYCLE_EVERY = 100,
     per_request_sleep: float = 0.5
-) -> pd.DataFrame:
+) -> bool:
     """
-    For each day in [start, end], call iterate_commodity_and_scrape(driver, day, day),
-    append results to base_dir/YYYY-MM-DD.jsonl.gz, and return the combined DataFrame.
-
-    Args:
-        driver: Selenium WebDriver
-        start_date, end_date: date strings (accepts YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY, etc.)
-        base_dir: base directory where date partitions will be written
-        per_request_sleep: seconds to sleep between days (politeness/backoff)
-        overwrite: if True, removes existing per-day output before writing
-
-    Returns:
-        pd.DataFrame with all rows across the range (empty if none)
+    For each day in [start, end], call iterate_commodity_and_scrape(day, day, base_dir, ...),
+    append results to base_dir/YYYY/MM/YYYY-MM-DD.jsonl.gz, using a file-backed cache.
     """
     d0 = to_date(start_date).date()
     d1 = to_date(end_date).date()
 
-    all_frames = []
+    # Cache file stored inside base_dir for visibility
+    base_path = Path(base_dir)
+    cache_file = base_path / "url.cache"
+    cache_set = load_url_cache(cache_file)
+    print(f"[CACHE] Loaded {len(cache_set)} cached URLs from {cache_file}")
+
     current = d0
     while current <= d1:
         day_iso = current.strftime("%Y-%m-%d")
         
         try:
-            
-            iterate_commodity_and_scrape(day_iso, day_iso)
+            iterate_commodity_and_scrape(day_iso, day_iso, base_dir, cache_set, cache_file, RECYCLE_EVERY)
         except Exception as e:
             print(f"[WARN] {day_iso}: {e}")
 
@@ -274,7 +303,7 @@ def make_driver():
 if __name__ == "__main__":
     base_dir ="../data/agmarknet"
     start = "2025-08-01"
-    end = "2025-10-31"
+    end = "2025-08-31"
     RECYCLE_EVERY = 10
 
     # Debug: single URL scrape
