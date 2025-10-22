@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 import gzip, json
 from pathlib import Path
+from io import StringIO
 
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -128,7 +129,7 @@ def read_range(dates, base_dir="data/commodities") -> pd.DataFrame:
     return pd.DataFrame()
 
 
-def scrape_table_to_df( driver, url: str, css_selector: str = "table.tableagmark_new", wait_seconds: int = 2,
+def scrape_table_to_df( driver, url: str, css_selector: str = "table.tableagmark_new", wait_seconds: int = 3,
 ) -> pd.DataFrame:
     """
     Navigate to `url`, wait for table with `css_selector`, parse to DataFrame, rename columns,
@@ -274,7 +275,19 @@ if __name__ == "__main__":
     base_dir ="../data/agmarknet"
     start = "2025-08-01"
     end = "2025-10-31"
-    RECYCLE_EVERY = 100
+    RECYCLE_EVERY = 10
 
+    # Debug: single URL scrape
+    # commodities = get_commodities()
+    # commodity = commodities[1]
+    # date_str = "2025-08-01"
+    # url = build_url(commodity, date_str, date_str)
+    # print(url)
+    # driver = make_driver()
+    # df = scrape_table_to_df(driver, url)
+    # print(df.head())
+    
     iterate_date_and_scrape(start, end, base_dir, RECYCLE_EVERY)
 
+    # Close drivers
+    driver.quit()
