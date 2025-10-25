@@ -54,15 +54,16 @@ def load_jsonl(file_path: str) -> list:
                 records.append(obj)
     return records
 
-def get_cache(file_path: str = ".open-meteo") -> set:
+def get_cache(file_path: str = "../data/meteo/.open-meteo") -> set:
     """Load cached keys from file."""
     if not os.path.exists(file_path):
         return set()
     with open(file_path, "r", encoding="utf-8") as f:
         return set(line.strip() for line in f if line.strip())
 
-def set_cache(key: str, file_path: str = ".open-meteo") -> None:
+def set_cache(key: str, file_path: str = "../data/meteo/.open-meteo") -> None:
     """Add key to cache file."""
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
     with open(file_path, "a", encoding="utf-8") as f:
         f.write(key + "\n")
 
