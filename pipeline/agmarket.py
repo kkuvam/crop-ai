@@ -229,6 +229,7 @@ def iterate_commodity_and_scrape(
                 df = scrape_table_to_df(driver, url)
                 print("Pulled data: ", df.shape)
                 save_jsonl_gz(df, out_path)
+                append_url_cache(cache_file, url, cache_set)
                 count += 1
             except Exception as e:
                 print(f"[WARN] {date_str}: No data could be retrieved for commodity {commodity}")
@@ -302,8 +303,8 @@ def make_driver():
 
 if __name__ == "__main__":
     base_dir ="../data/agmarknet"
-    start = "2025-08-01"
-    end = "2025-08-31"
+    start = "2024-10-01"
+    end = "2024-10-31"
     RECYCLE_EVERY = 10
 
     # Debug: single URL scrape
@@ -319,4 +320,4 @@ if __name__ == "__main__":
     iterate_date_and_scrape(start, end, base_dir, RECYCLE_EVERY)
 
     # Close drivers
-    driver.quit()
+    
