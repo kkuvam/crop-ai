@@ -269,7 +269,7 @@ def throttle():
 def run_archive(year: int):
     """Run archive mode for the specified year."""
     client = build_openmeteo_client()
-    locs = load_jsonl("mandies_20250907.jsonl")
+    locs = load_jsonl("../data/agmarknet/mandies_20250907.jsonl")
     cache = get_cache()
     print(f"Processing {len(locs)} records for archive (year {year})...")
     start_str = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -319,7 +319,7 @@ def run_archive(year: int):
 def run_forecast():
     """Run forecast mode."""
     client = build_openmeteo_client()
-    locs = load_jsonl("mandies_20250907.jsonl")
+    locs = load_jsonl("../data/agmarknet/mandies_20250907.jsonl")
     cache = get_cache()
     print(f"Processing {len(locs)} records for forecast...")
     start_str = time.strftime("%Y-%m-%d %H:%M:%S")
