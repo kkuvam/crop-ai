@@ -303,8 +303,8 @@ def make_driver():
 
 if __name__ == "__main__":
     base_dir ="../data/agmarknet"
-    start = "2024-10-01"
-    end = "2024-10-31"
+    start = "2024-08-01"
+    end = "2024-08-31"
     RECYCLE_EVERY = 10
 
     # Debug: single URL scrape

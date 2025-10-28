@@ -41,3 +41,9 @@ data/
 .specify/
 .github/
 specs/
+
+# DuckDb
+duckdb/*
+
+# Log
+log/*
