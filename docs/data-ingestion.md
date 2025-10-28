@@ -378,6 +378,6 @@ You’ll learn:
 - Data ingestion & cleaning  
 - Feature engineering  
 - Time-series modeling  
-- Result evaluation & iteration  
+- Result evaluation & iteration
 
 
