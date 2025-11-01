@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS openmeteo_bronze_files (
     -- Temporal metadata
     year INTEGER,                                   -- data year
     month INTEGER,                                  -- data month (1-12)
-    
+    reported_date DATE,                             -- reported date (if available)
+
     -- Content metadata
     raw_payload VARCHAR,                            -- full JSON/JSONL content
     row_count INTEGER DEFAULT 1,                    -- number of data rows
@@ -147,7 +148,8 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
         -- Temporal metadata
         year INTEGER,
         month INTEGER,
-        
+        reported_date DATE,
+
         -- Content metadata
         raw_payload VARCHAR,
         row_count INTEGER DEFAULT 1,
