@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-pipeline/parse_bronze_meteo.py
+pipeline/parse_bronze_agmarket.py
 
-Parse Open-Meteo data from `openmeteo_bronze_files` table into `openmeteo_bronze_rows`.
+Parse Agmarknet data from `agmarknet_bronze_files` table into `agmarknet_bronze_rows`.
 - Reads raw_payload from bronze_files table
-- Expands JSON/JSONL into individual daily weather records
+- Expands JSON/JSONL into individual market arrival records
 - Computes deterministic row_id and record_hash for deduplication
 - Handles versioning for reloads (increments version, maintains is_latest)
 - Tracks data quality (nulls, completeness)
@@ -12,37 +12,26 @@ Parse Open-Meteo data from `openmeteo_bronze_files` table into `openmeteo_bronze
 
 SCHEMA:
 -------
-CREATE TABLE IF NOT EXISTS openmeteo_bronze_rows (
+CREATE TABLE IF NOT EXISTS agmarknet_bronze_rows (
     row_id VARCHAR PRIMARY KEY,
     file_id VARCHAR NOT NULL,
     country VARCHAR DEFAULT 'IN',
-    state VARCHAR,
-    district VARCHAR,
-    place_name_norm VARCHAR,
-    lat DOUBLE,
-    lon DOUBLE,
-    lat_tile DOUBLE,
-    lon_tile DOUBLE,
-    date DATE NOT NULL,
+    state_name VARCHAR,
+    district_name VARCHAR,
+    market_name VARCHAR,
+    market_name_norm VARCHAR,
+    commodity_name VARCHAR,
+    commodity_group VARCHAR,
+    variety VARCHAR,
+    grade VARCHAR,
+    reported_date DATE NOT NULL,
     year INTEGER NOT NULL,
     month INTEGER NOT NULL,
     day INTEGER NOT NULL,
-    temperature_2m_mean DOUBLE,
-    temperature_2m_max DOUBLE,
-    temperature_2m_min DOUBLE,
-    cloud_cover_mean DOUBLE,
-    relative_humidity_2m_max DOUBLE,
-    relative_humidity_2m_min DOUBLE,
-    relative_humidity_2m_mean DOUBLE,
-    wind_speed_10m_max DOUBLE,
-    wind_speed_10m_min DOUBLE,
-    wind_speed_10m_mean DOUBLE,
-    wet_bulb_temperature_2m_min DOUBLE,
-    wet_bulb_temperature_2m_max DOUBLE,
-    wet_bulb_temperature_2m_mean DOUBLE,
-    wind_direction_10m_dominant DOUBLE,
-    rain_sum DOUBLE,
-    precipitation_sum DOUBLE,
+    arrivals DOUBLE,
+    min_price DOUBLE,
+    max_price DOUBLE,
+    modal_price DOUBLE,
     has_nulls BOOLEAN DEFAULT FALSE,
     is_complete BOOLEAN DEFAULT TRUE,
     null_field_count INTEGER DEFAULT 0,
@@ -56,7 +45,7 @@ CREATE TABLE IF NOT EXISTS openmeteo_bronze_rows (
     source_row_number INTEGER,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (file_id) REFERENCES openmeteo_bronze_files(file_id)
+    FOREIGN KEY (file_id) REFERENCES agmarknet_bronze_files(file_id)
 );
 """
 
@@ -67,25 +56,23 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Set, Tuple
 import duckdb
+from pipeline.ingest_bronze_common import normalize_place_name
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
 DB_PATH = Path("/Volumes/Extreme/Mission/duckdb/cropai.duckdb")
-FILES_TABLE = "openmeteo_bronze_files"
-ROWS_TABLE = "openmeteo_bronze_rows"
+FILES_TABLE = "agmarknet_bronze_files"
+ROWS_TABLE = "agmarknet_bronze_rows"
 MANIFEST_DIR = Path("/Volumes/Extreme/Mission/manifests/run")
 
-# Expected weather measurement fields
-WEATHER_FIELDS = [
-    "temperature_2m_mean", "temperature_2m_max", "temperature_2m_min",
-    "cloud_cover_mean",
-    "relative_humidity_2m_max", "relative_humidity_2m_min", "relative_humidity_2m_mean",
-    "wind_speed_10m_max", "wind_speed_10m_min", "wind_speed_10m_mean",
-    "wet_bulb_temperature_2m_min", "wet_bulb_temperature_2m_max", "wet_bulb_temperature_2m_mean",
-    "wind_direction_10m_dominant",
-    "rain_sum", "precipitation_sum"
+# Expected fields for quality checks
+REQUIRED_FIELDS = [
+    "state_name", "district_name", "market_name", "commodity_name",
+    "reported_date"
 ]
+
+PRICE_FIELDS = ["arrivals", "min_price", "max_price", "modal_price"]
 
 # Setup logging
 logging.basicConfig(
@@ -108,39 +95,30 @@ def create_rows_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
         row_id VARCHAR PRIMARY KEY,
         file_id VARCHAR NOT NULL,
         
-        -- Geographic identifiers (denormalized from filename)
+        -- Geographic identifiers
         country VARCHAR DEFAULT 'IN',
-        state VARCHAR,
-        district VARCHAR,
-        place_name_norm VARCHAR,
-        lat DOUBLE,
-        lon DOUBLE,
-        lat_tile DOUBLE,
-        lon_tile DOUBLE,
+        state_name VARCHAR,
+        district_name VARCHAR,
+        market_name VARCHAR,
+        market_name_norm VARCHAR,
+        
+        -- Commodity information
+        commodity_name VARCHAR,
+        commodity_group VARCHAR,
+        variety VARCHAR,
+        grade VARCHAR,
         
         -- Temporal dimension
-        date DATE NOT NULL,
+        reported_date DATE NOT NULL,
         year INTEGER NOT NULL,
         month INTEGER NOT NULL,
         day INTEGER NOT NULL,
         
-        -- Weather measurements
-        temperature_2m_mean DOUBLE,
-        temperature_2m_max DOUBLE,
-        temperature_2m_min DOUBLE,
-        cloud_cover_mean DOUBLE,
-        relative_humidity_2m_max DOUBLE,
-        relative_humidity_2m_min DOUBLE,
-        relative_humidity_2m_mean DOUBLE,
-        wind_speed_10m_max DOUBLE,
-        wind_speed_10m_min DOUBLE,
-        wind_speed_10m_mean DOUBLE,
-        wet_bulb_temperature_2m_min DOUBLE,
-        wet_bulb_temperature_2m_max DOUBLE,
-        wet_bulb_temperature_2m_mean DOUBLE,
-        wind_direction_10m_dominant DOUBLE,
-        rain_sum DOUBLE,
-        precipitation_sum DOUBLE,
+        -- Market data
+        arrivals DOUBLE,
+        min_price DOUBLE,
+        max_price DOUBLE,
+        modal_price DOUBLE,
         
         -- Data quality flags
         has_nulls BOOLEAN DEFAULT FALSE,
@@ -171,15 +149,15 @@ def create_rows_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
     # Create indexes for performance
     indexes = [
         f"CREATE INDEX IF NOT EXISTS idx_rows_file_id ON {ROWS_TABLE}(file_id);",
-        f"CREATE INDEX IF NOT EXISTS idx_rows_date ON {ROWS_TABLE}(date);",
-        f"CREATE INDEX IF NOT EXISTS idx_rows_place_date ON {ROWS_TABLE}(place_name_norm, date);",
-        f"CREATE INDEX IF NOT EXISTS idx_rows_geo_date ON {ROWS_TABLE}(lat_tile, lon_tile, date);",
+        f"CREATE INDEX IF NOT EXISTS idx_rows_date ON {ROWS_TABLE}(reported_date);",
+        f"CREATE INDEX IF NOT EXISTS idx_rows_market_date ON {ROWS_TABLE}(market_name_norm, reported_date);",
+        f"CREATE INDEX IF NOT EXISTS idx_rows_commodity_date ON {ROWS_TABLE}(commodity_name, reported_date);",
+        f"CREATE INDEX IF NOT EXISTS idx_rows_state_date ON {ROWS_TABLE}(state_name, reported_date);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_year_month ON {ROWS_TABLE}(year, month);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_ingest_job ON {ROWS_TABLE}(ingest_job_id);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_record_hash ON {ROWS_TABLE}(record_hash);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_latest ON {ROWS_TABLE}(is_latest) WHERE is_latest = TRUE;",
-        f"CREATE UNIQUE INDEX IF NOT EXISTS idx_rows_unique_location_date_version ON {ROWS_TABLE}(lat, lon, date, version);",
-        f"CREATE INDEX IF NOT EXISTS idx_rows_state_district_date ON {ROWS_TABLE}(state, district, date);",
+        f"CREATE UNIQUE INDEX IF NOT EXISTS idx_rows_unique_market_commodity_date_version ON {ROWS_TABLE}(market_name, commodity_name, variety, grade, reported_date, version);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_created_at ON {ROWS_TABLE}(created_at);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_superseded ON {ROWS_TABLE}(superseded_by, superseded_at) WHERE superseded_by IS NOT NULL;",
     ]
@@ -200,23 +178,33 @@ def create_rows_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
-def compute_row_id(file_id: str, date: str, lat: float, lon: float) -> str:
-    """Generate deterministic row_id from file_id, date, and coordinates."""
-    key = f"{file_id}|{date}|{lat}|{lon}"
+def compute_row_id(
+    file_id: str,
+    market_name: str,
+    commodity_name: str,
+    variety: str,
+    grade: str,
+    reported_date: str
+) -> str:
+    """Generate deterministic row_id from key fields."""
+    key = f"{file_id}|{market_name}|{commodity_name}|{variety or ''}|{grade or ''}|{reported_date}"
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
-def compute_record_hash(weather_data: Dict[str, Any]) -> str:
-    """Generate hash of weather measurements only (excludes metadata)."""
-    # Extract only weather fields in consistent order
-    measurements = {k: weather_data.get(k) for k in sorted(WEATHER_FIELDS)}
-    key = json.dumps(measurements, sort_keys=True)
+def compute_record_hash(record: Dict[str, Any]) -> str:
+    """Generate hash of market data (excludes metadata)."""
+    # Extract only data fields in consistent order
+    data_fields = {
+        k: record.get(k) 
+        for k in sorted(PRICE_FIELDS)
+    }
+    key = json.dumps(data_fields, sort_keys=True)
     return hashlib.sha256(key.encode()).hexdigest()[:32]
 
 
 def check_data_quality(record: Dict[str, Any]) -> Tuple[bool, bool, int]:
     """
-    Check data quality of a weather record.
+    Check data quality of a market record.
     
     Returns:
         (has_nulls, is_complete, null_field_count)
@@ -225,11 +213,15 @@ def check_data_quality(record: Dict[str, Any]) -> Tuple[bool, bool, int]:
     has_nulls = False
     is_complete = True
     
-    for field in WEATHER_FIELDS:
-        if field not in record:
+    # Check required fields
+    for field in REQUIRED_FIELDS:
+        if field not in record or record[field] is None or record[field] == '':
             is_complete = False
             null_count += 1
-        elif record[field] is None:
+    
+    # Check price fields for nulls
+    for field in PRICE_FIELDS:
+        if field in record and record[field] is None:
             has_nulls = True
             null_count += 1
     
@@ -238,15 +230,64 @@ def check_data_quality(record: Dict[str, Any]) -> Tuple[bool, bool, int]:
 
 def parse_date(date_str: str) -> Tuple[str, int, int, int]:
     """
-    Parse ISO date string into components.
+    Parse date string in format 'DD MMM YYYY' (e.g., '01 Jan 2025').
     
     Returns:
-        (date, year, month, day)
+        (date_iso, year, month, day)
     """
-    # Handle both 'YYYY-MM-DD' and 'YYYY-MM-DDTHH:MM:SS.mmm'
-    date_part = date_str.split('T')[0]
-    dt = datetime.strptime(date_part, '%Y-%m-%d')
-    return date_part, dt.year, dt.month, dt.day
+    # Handle various date formats
+    date_str = date_str.strip()
+    
+    # Try 'DD MMM YYYY' format (e.g., '01 Jan 2025')
+    try:
+        dt = datetime.strptime(date_str, '%d %b %Y')
+        return dt.strftime('%Y-%m-%d'), dt.year, dt.month, dt.day
+    except ValueError:
+        pass
+    
+    # Try 'DD-MMM-YYYY' format
+    try:
+        dt = datetime.strptime(date_str, '%d-%b-%Y')
+        return dt.strftime('%Y-%m-%d'), dt.year, dt.month, dt.day
+    except ValueError:
+        pass
+    
+    # Try 'YYYY-MM-DD' format
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d')
+        return dt.strftime('%Y-%m-%d'), dt.year, dt.month, dt.day
+    except ValueError:
+        pass
+    
+    # Try 'DD/MM/YYYY' format
+    try:
+        dt = datetime.strptime(date_str, '%d/%m/%Y')
+        return dt.strftime('%Y-%m-%d'), dt.year, dt.month, dt.day
+    except ValueError:
+        pass
+    
+    raise ValueError(f"Could not parse date: {date_str}")
+
+
+def parse_numeric(value: Any) -> Optional[float]:
+    """Parse numeric value, handling strings and null values."""
+    if value is None or value == '':
+        return None
+    
+    if isinstance(value, (int, float)):
+        return float(value)
+    
+    if isinstance(value, str):
+        # Remove commas and whitespace
+        value = value.replace(',', '').strip()
+        if value == '' or value.lower() in ('na', 'n/a', 'null', 'none'):
+            return None
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    
+    return None
 
 
 def parse_json_payload(payload: str, data_format: str) -> List[Dict[str, Any]]:
@@ -258,7 +299,7 @@ def parse_json_payload(payload: str, data_format: str) -> List[Dict[str, Any]]:
         data_format: 'json' or 'jsonl'
     
     Returns:
-        List of weather records
+        List of market records
     """
     records = []
     
@@ -284,12 +325,14 @@ def parse_json_payload(payload: str, data_format: str) -> List[Dict[str, Any]]:
 
 def get_existing_row_versions(
     con: duckdb.DuckDBPyConnection,
-    lat: float,
-    lon: float,
-    date: str
+    market_name: str,
+    commodity_name: str,
+    variety: str,
+    grade: str,
+    reported_date: str
 ) -> List[Dict[str, Any]]:
     """
-    Get all existing versions for a specific location and date.
+    Get all existing versions for a specific market/commodity/date combination.
     
     Returns:
         List of dicts with row_id, version, record_hash, is_latest
@@ -297,12 +340,23 @@ def get_existing_row_versions(
     query = f"""
     SELECT row_id, version, record_hash, is_latest
     FROM {ROWS_TABLE}
-    WHERE lat = ? AND lon = ? AND date = ?
+    WHERE market_name = ? 
+      AND commodity_name = ? 
+      AND COALESCE(variety, '') = ?
+      AND COALESCE(grade, '') = ?
+      AND reported_date = ?
     ORDER BY version DESC
     """
     
     try:
-        result = con.execute(query, [lat, lon, date]).fetchall()
+        result = con.execute(query, [
+            market_name,
+            commodity_name,
+            variety or '',
+            grade or '',
+            reported_date
+        ]).fetchall()
+        
         return [
             {
                 'row_id': r[0],
@@ -352,42 +406,24 @@ def process_file_records(
         })
         return 0
     
-    # Extract metadata from file record
-    country = file_record['country']
-    state = file_record['state']
-    district = file_record['district']
-    place_name_norm = file_record['place_name_norm']
-    lat = file_record['lat']
-    lon = file_record['lon']
-    lat_tile = file_record['lat_tile']
-    lon_tile = file_record['lon_tile']
-    
     # Prepare insert SQL
     insert_sql = f"""
     INSERT INTO {ROWS_TABLE} (
-        row_id, file_id, country, state, district, place_name_norm,
-        lat, lon, lat_tile, lon_tile,
-        date, year, month, day,
-        temperature_2m_mean, temperature_2m_max, temperature_2m_min,
-        cloud_cover_mean,
-        relative_humidity_2m_max, relative_humidity_2m_min, relative_humidity_2m_mean,
-        wind_speed_10m_max, wind_speed_10m_min, wind_speed_10m_mean,
-        wet_bulb_temperature_2m_min, wet_bulb_temperature_2m_max, wet_bulb_temperature_2m_mean,
-        wind_direction_10m_dominant, rain_sum, precipitation_sum,
+        row_id, file_id, country,
+        state_name, district_name, market_name, market_name_norm,
+        commodity_name, commodity_group, variety, grade,
+        reported_date, year, month, day,
+        arrivals, min_price, max_price, modal_price,
         has_nulls, is_complete, null_field_count,
         record_hash, is_latest, version,
         ingest_job_id, ingest_ts, source_row_number,
         created_at, updated_at
     ) VALUES (
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?,
-        ?,
-        ?, ?, ?,
-        ?, ?, ?,
-        ?, ?, ?,
-        ?, ?, ?,
+        ?, ?, ?, ?,
+        ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?,
@@ -411,23 +447,61 @@ def process_file_records(
     
     for idx, record in enumerate(records):
         try:
-            # Validate date field
-            if 'date' not in record:
-                logger.warning(f"Record {idx} missing 'date' field in file {file_id}")
+            # Validate required fields
+            if 'reported_date' not in record or not record['reported_date']:
+                logger.warning(f"Record {idx} missing 'reported_date' field in file {file_id}")
                 continue
             
             # Parse date
-            date_str, year, month, day = parse_date(record['date'])
+            try:
+                date_iso, year, month, day = parse_date(record['reported_date'])
+            except ValueError as e:
+                logger.warning(f"Record {idx} has invalid date in file {file_id}: {e}")
+                continue
+            
+            # Extract fields
+            state_name = record.get('state_name', '').strip() or None
+            district_name = record.get('district_name', '').strip() or None
+            market_name = record.get('market_name', '').strip() or None
+            commodity_name = record.get('commodity_name', '').strip() or None
+            commodity_group = record.get('group', '').strip() or None
+            variety = record.get('variety', '').strip() or None
+            grade = record.get('grade', '').strip() or None
+            
+            # Skip if missing critical fields
+            if not market_name or not commodity_name:
+                logger.warning(f"Record {idx} missing market_name or commodity_name in file {file_id}")
+                continue
+            
+            # Normalize market name
+            market_name_norm = normalize_place_name(market_name)
+            
+            # Parse numeric fields
+            arrivals = parse_numeric(record.get('arrivals'))
+            min_price = parse_numeric(record.get('min_price'))
+            max_price = parse_numeric(record.get('max_price'))
+            modal_price = parse_numeric(record.get('modal_price'))
             
             # Generate IDs and hashes
-            row_id = compute_row_id(file_id, date_str, lat, lon)
-            record_hash = compute_record_hash(record)
+            row_id = compute_row_id(
+                file_id, market_name, commodity_name,
+                variety or '', grade or '', date_iso
+            )
+            record_hash = compute_record_hash({
+                'arrivals': arrivals,
+                'min_price': min_price,
+                'max_price': max_price,
+                'modal_price': modal_price
+            })
             
             # Check data quality
             has_nulls, is_complete, null_count = check_data_quality(record)
             
             # Check for existing versions
-            existing = get_existing_row_versions(con, lat, lon, date_str)
+            existing = get_existing_row_versions(
+                con, market_name, commodity_name,
+                variety or '', grade or '', date_iso
+            )
             
             version = 1
             is_new_version = False
@@ -456,25 +530,11 @@ def process_file_records(
             
             # Insert new row
             con.execute(insert_sql, [
-                row_id, file_id, country, state, district, place_name_norm,
-                lat, lon, lat_tile, lon_tile,
-                date_str, year, month, day,
-                record.get('temperature_2m_mean'),
-                record.get('temperature_2m_max'),
-                record.get('temperature_2m_min'),
-                record.get('cloud_cover_mean'),
-                record.get('relative_humidity_2m_max'),
-                record.get('relative_humidity_2m_min'),
-                record.get('relative_humidity_2m_mean'),
-                record.get('wind_speed_10m_max'),
-                record.get('wind_speed_10m_min'),
-                record.get('wind_speed_10m_mean'),
-                record.get('wet_bulb_temperature_2m_min'),
-                record.get('wet_bulb_temperature_2m_max'),
-                record.get('wet_bulb_temperature_2m_mean'),
-                record.get('wind_direction_10m_dominant'),
-                record.get('rain_sum'),
-                record.get('precipitation_sum'),
+                row_id, file_id, 'IN',
+                state_name, district_name, market_name, market_name_norm,
+                commodity_name, commodity_group, variety, grade,
+                date_iso, year, month, day,
+                arrivals, min_price, max_price, modal_price,
                 has_nulls, is_complete, null_count,
                 record_hash, True, version,
                 run_id, now, idx + 1,
@@ -484,7 +544,10 @@ def process_file_records(
             rows_inserted += 1
             
             if is_new_version:
-                logger.debug(f"Created version {version} for {date_str} at ({lat}, {lon})")
+                logger.debug(
+                    f"Created version {version} for {market_name}/{commodity_name} "
+                    f"on {date_iso}"
+                )
             
         except Exception as e:
             logger.error(f"Failed to process record {idx} from file {file_id}: {e}")
@@ -535,7 +598,7 @@ def main():
     
     # Prepare manifest
     MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
-    run_id = f"parse_meteo_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    run_id = f"parse_agmarket_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     manifest = {
         "run_id": run_id,
         "started_at": datetime.now().isoformat(),
@@ -553,12 +616,12 @@ def main():
     }
     
     # Fetch files that need parsing
-    # Strategy: Parse files that haven't been parsed yet or need reprocessing
     query = f"""
     SELECT 
         file_id, checksum, original_filename, file_path,
-        country, state, district, place_name_norm,
-        lat, lon, lat_tile, lon_tile,
+        country, state_name, district_name,
+        market_name_raw, market_name_norm,
+        commodity_name, commodity_group,
         year, month, raw_payload, row_count, data_format
     FROM {FILES_TABLE}
     WHERE raw_payload IS NOT NULL
@@ -581,18 +644,17 @@ def main():
             'original_filename': file_row[2],
             'file_path': file_row[3],
             'country': file_row[4],
-            'state': file_row[5],
-            'district': file_row[6],
-            'place_name_norm': file_row[7],
-            'lat': file_row[8],
-            'lon': file_row[9],
-            'lat_tile': file_row[10],
-            'lon_tile': file_row[11],
-            'year': file_row[12],
-            'month': file_row[13],
-            'raw_payload': file_row[14],
-            'row_count': file_row[15],
-            'data_format': file_row[16]
+            'state_name': file_row[5],
+            'district_name': file_row[6],
+            'market_name_raw': file_row[7],
+            'market_name_norm': file_row[8],
+            'commodity_name': file_row[9],
+            'commodity_group': file_row[10],
+            'year': file_row[11],
+            'month': file_row[12],
+            'raw_payload': file_row[13],
+            'row_count': file_row[14],
+            'data_format': file_row[15]
         }
         
         try:
