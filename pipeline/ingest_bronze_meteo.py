@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS openmeteo_bronze_files (
     file_size_bytes BIGINT,                         -- file size for monitoring
     
     -- Geographic metadata (parsed from filename)
-    country VARCHAR,                                -- e.g., 'in' for India
+    country VARCHAR DEFAULT 'IN',                   -- e.g., 'IN' for India
     state VARCHAR,                                  -- e.g., 'Andhra Pradesh'
     district VARCHAR,                               -- e.g., 'Anantapur'
     place_name_raw VARCHAR,                         -- original place name
@@ -131,7 +131,7 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
         file_size_bytes BIGINT,
         
         -- Geographic metadata
-        country VARCHAR,
+        country VARCHAR DEFAULT 'IN',
         state VARCHAR,
         district VARCHAR,
         place_name_raw VARCHAR,
