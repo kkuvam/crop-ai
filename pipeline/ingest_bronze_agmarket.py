@@ -70,6 +70,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, Set
 import duckdb
+import gzip
 from ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path, get_existing_checksums
 
 # ============================================================================
@@ -183,10 +184,13 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
     fname = fpath.name
     base = fname.rsplit('.', 1)[0]
     parts = base.split('_')
-    # Basic file info
-    fname = fpath.name
     file_size = fpath.stat().st_size
-    data_format = 'jsonl' if fname.endswith('.jsonl') else 'json'
+    if fname.endswith('.jsonl.gz'):
+        data_format = 'jsonl'  # treat gzipped jsonl as jsonl
+    elif fname.endswith('.jsonl'):
+        data_format = 'jsonl'
+    else:
+        data_format = 'json'
 
     # Only extract year, month, and day from file path/filename
     year, month = extract_year_month_from_path(fpath)
@@ -213,7 +217,12 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
         raw_payload = f"[PAYLOAD_TOO_LARGE: {file_size} bytes]"
     else:
         try:
-            if data_format == 'jsonl':
+            if data_format == 'jsonl' and fname.endswith('.jsonl.gz'):
+                with gzip.open(fpath, 'rt', encoding='utf-8') as fh:
+                    lines = fh.readlines()
+                row_count = len(lines)
+                raw_payload = '\n'.join(lines)
+            elif data_format == 'jsonl':
                 row_count = count_jsonl_rows(fpath)
                 with fpath.open('r', encoding='utf-8') as fh:
                     raw_payload = fh.read()
@@ -332,7 +341,7 @@ def main():
     
     for root, dirs, files in os.walk(DATA_DIR):
         for fname in sorted(files):
-            if not (fname.endswith('.json') or fname.endswith('.jsonl')):
+            if not (fname.endswith('.json') or fname.endswith('.jsonl') or fname.endswith('.jsonl.gz')):
                 continue
             
             fpath = Path(root) / fname
