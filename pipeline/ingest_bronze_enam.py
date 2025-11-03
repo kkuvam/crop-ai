@@ -68,7 +68,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, Set
 import duckdb
-from pipeline.ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path, get_existing_checksums
+import gzip
+from ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path, get_existing_checksums
 
 
 # CONFIGURATION
@@ -92,26 +93,33 @@ logger = logging.getLogger(__name__)
 def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {TABLE} (
+        -- Primary identification
         file_id VARCHAR PRIMARY KEY,
         checksum VARCHAR NOT NULL UNIQUE,
         original_filename VARCHAR NOT NULL,
         file_path VARCHAR NOT NULL,
         file_size_bytes BIGINT,
+        -- Geographic metadata
         country VARCHAR DEFAULT 'IN',
         state_name VARCHAR,
         apmc_raw VARCHAR,
         apmc_norm VARCHAR,
         commodity_name VARCHAR,
+        -- Temporal metadata
         year INTEGER,
         month INTEGER,
         reported_date DATE,
+        -- Content metadata
         raw_payload VARCHAR,
         row_count INTEGER DEFAULT 1,
         data_format VARCHAR,
+        -- Partitioning
         partition_path VARCHAR,
+        -- Ingestion tracking
         ingest_job_id VARCHAR NOT NULL,
         ingest_ts TIMESTAMP NOT NULL,
         ingest_duration_ms INTEGER,
+        -- Audit timestamps
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
@@ -121,7 +129,7 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
         f"CREATE INDEX IF NOT EXISTS idx_apmc_norm_enam ON {TABLE}(apmc_norm);",
         f"CREATE INDEX IF NOT EXISTS idx_year_month_enam ON {TABLE}(year, month);",
         f"CREATE INDEX IF NOT EXISTS idx_ingest_job_enam ON {TABLE}(ingest_job_id);",
-        f"CREATE INDEX IF NOT EXISTS idx_created_at_enam ON {TABLE}(created_at_ts);",
+        f"CREATE INDEX IF NOT EXISTS idx_created_at_enam ON {TABLE}(created_at);",
     ]
     try:
         con.execute(create_table_sql)
@@ -146,7 +154,12 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
     start_time = time.time()
     fname = fpath.name
     file_size = fpath.stat().st_size
-    data_format = 'jsonl' if fname.endswith('.jsonl') else 'json'
+    if fname.endswith('.jsonl.gz'):
+        data_format = 'jsonl'
+    elif fname.endswith('.jsonl'):
+        data_format = 'jsonl'
+    else:
+        data_format = 'json'
     year, month = extract_year_month_from_path(fpath)
     checksum = file_checksum(fpath)
     raw_payload = None
@@ -157,7 +170,17 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
         raw_payload = f"[PAYLOAD_TOO_LARGE: {file_size} bytes]"
     else:
         try:
-            if data_format == 'jsonl':
+            if data_format == 'jsonl' and fname.endswith('.jsonl.gz'):
+                with gzip.open(fpath, 'rt', encoding='utf-8') as fh:
+                    lines = fh.readlines()
+                row_count = len(lines)
+                raw_payload = '\n'.join([line.rstrip('\n') for line in lines])
+                for line in lines:
+                    try:
+                        records.append(json.loads(line))
+                    except Exception:
+                        continue
+            elif data_format == 'jsonl':
                 row_count = count_jsonl_rows(fpath)
                 with fpath.open('r', encoding='utf-8') as fh:
                     raw_payload = fh.read()
@@ -276,7 +299,7 @@ def main():
     logger.info(f"Scanning files in {DATA_DIR}")
     for root, dirs, files in os.walk(DATA_DIR):
         for fname in sorted(files):
-            if not (fname.endswith('.json') or fname.endswith('.jsonl')):
+            if not (fname.endswith('.json') or fname.endswith('.jsonl') or fname.endswith('.jsonl.gz')):
                 continue
             fpath = Path(root) / fname
             manifest["stats"]["total_files_scanned"] += 1
