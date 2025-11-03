@@ -78,7 +78,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, Set
 import duckdb
-from pipeline.ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path, get_existing_checksums
+from ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path, get_existing_checksums
 
 
 
@@ -101,7 +101,8 @@ STATE_DICT = [
     "Kerala", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram", 
     "Nagaland", "Odisha", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", 
     "Telangana", "Tripura", "Uttar Pradesh", "Uttarakhand", "West Bengal", 
-    "Jammu and Kashmir", "Ladakh", "Delhi", "Puducherry"
+    "Andaman and Nicobar Islands", "Chandigarh", "Dadra and Nagar Haveli and Daman and Diu", 
+    "Delhi", "Jammu and Kashmir", "Ladakh", "Lakshadweep", "Puducherry"
 ]
 
 STATE_NORMALIZED = {re.sub(r'\s+', '_', s).lower(): s for s in STATE_DICT}

@@ -56,7 +56,7 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Set, Tuple
 import duckdb
-from pipeline.ingest_bronze_common import normalize_place_name
+from ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path, get_existing_checksums
 
 # ============================================================================
 # CONFIGURATION
