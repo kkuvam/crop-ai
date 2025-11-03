@@ -70,12 +70,12 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Any, Set
 import duckdb
-from pipeline.ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path, get_existing_checksums
+from ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path, get_existing_checksums
 
 # ============================================================================
 # CONFIGURATION
 # ============================================================================
-DATA_DIR = Path("/Volumes/Extreme/Mission/data/agmarket")
+DATA_DIR = Path("/Volumes/Extreme/Mission/data/agmarknet")
 DB_PATH = Path("/Volumes/Extreme/Mission/duckdb/cropai.duckdb")
 TABLE = "agmarknet_bronze_files"
 MANIFEST_DIR = Path("/Volumes/Extreme/Mission/manifests/run")
@@ -91,9 +91,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Regex patterns
-FLOAT_FIND_RE = re.compile(r"-?\d+\.\d+")
-
 # ============================================================================
 # DATABASE SETUP
 # ============================================================================
@@ -101,11 +98,14 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
     """Create the bronze files table with optimized schema if it doesn't exist."""
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {TABLE} (
+        -- Primary identification
         file_id VARCHAR PRIMARY KEY,
         checksum VARCHAR NOT NULL UNIQUE,
         original_filename VARCHAR NOT NULL,
         file_path VARCHAR NOT NULL,
         file_size_bytes BIGINT,
+        
+        -- Geographical metadata
         country VARCHAR DEFAULT 'IN',
         state_name VARCHAR,
         district_name VARCHAR,
@@ -113,23 +113,33 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
         market_name_norm VARCHAR,
         commodity_name VARCHAR,
         commodity_group VARCHAR,
+        
+        -- Temporal metadata
         year INTEGER,
         month INTEGER,
         reported_date DATE,
+        
+        -- Content metadata
         raw_payload VARCHAR,
         row_count INTEGER DEFAULT 1,
         data_format VARCHAR,
+        
+        -- Partitioning
         partition_path VARCHAR,
+        
+        -- Ingestion tracking
         ingest_job_id VARCHAR NOT NULL,
         ingest_ts TIMESTAMP NOT NULL,
         ingest_duration_ms INTEGER,
+        
+        -- Audit timestamps
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     """
     indexes = [
         f"CREATE INDEX IF NOT EXISTS idx_checksum ON {TABLE}(checksum);",
-        f"CREATE INDEX IF NOT EXISTS idx_market_norm ON {TABLE}(market_name);",
+        f"CREATE INDEX IF NOT EXISTS idx_market_norm ON {TABLE}(market_name_norm);",
         f"CREATE INDEX IF NOT EXISTS idx_year_month ON {TABLE}(year, month);",
         f"CREATE INDEX IF NOT EXISTS idx_ingest_job ON {TABLE}(ingest_job_id);",
         f"CREATE INDEX IF NOT EXISTS idx_created_at ON {TABLE}(created_at);",
@@ -182,6 +192,7 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
     year, month = extract_year_month_from_path(fpath)
     # Optionally extract day if needed
     reported_date = None
+    
     # Try to extract day from filename (e.g., YYYYMMDD or YYYY-MM-DD)
     m = re.search(r'(\d{4})[-_]?([01]\d)[-_]?([0-3]\d)', fname)
     if m:
