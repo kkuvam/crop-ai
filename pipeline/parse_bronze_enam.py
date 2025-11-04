@@ -13,33 +13,48 @@ Parse eNAM data from `enam_bronze_files` table into `enam_bronze_rows`.
 SCHEMA:
 -------
 CREATE TABLE IF NOT EXISTS enam_bronze_rows (
+    -- Primary identification
     row_id VARCHAR PRIMARY KEY,
     file_id VARCHAR NOT NULL,
+
+    -- Geographic identifiers
     country VARCHAR DEFAULT 'IN',
     state VARCHAR,
     apmc VARCHAR,
     apmc_norm VARCHAR,
+
+    -- Commodity information
     commodity VARCHAR,
     min_price DOUBLE,
     modal_price DOUBLE,
     max_price DOUBLE,
     commodity_arrivals DOUBLE,
     commodity_traded DOUBLE,
-    reported_date DATE NOT NULL,
+    
+    -- Temporal dimension
     year INTEGER NOT NULL,
     month INTEGER NOT NULL,
     day INTEGER NOT NULL,
+    reported_date DATE NOT NULL,
+    
+    -- Data quality flags
     has_nulls BOOLEAN DEFAULT FALSE,
     is_complete BOOLEAN DEFAULT TRUE,
     null_field_count INTEGER DEFAULT 0,
+    
+    -- Deduplication & versioning
     record_hash VARCHAR NOT NULL,
     is_latest BOOLEAN DEFAULT TRUE,
     version INTEGER DEFAULT 1,
     superseded_by VARCHAR,
     superseded_at TIMESTAMP,
+    
+    -- Ingestion tracking
     ingest_job_id VARCHAR NOT NULL,
     ingest_ts TIMESTAMP NOT NULL,
     source_row_number INTEGER,
+    
+    -- Audit timestamps
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (file_id) REFERENCES enam_bronze_files(file_id)
@@ -76,33 +91,41 @@ logger = logging.getLogger(__name__)
 def create_rows_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {ROWS_TABLE} (
+        -- Primary identification
         row_id VARCHAR PRIMARY KEY,
         file_id VARCHAR NOT NULL,
+        -- Geographic identifiers
         country VARCHAR DEFAULT 'IN',
         state VARCHAR,
         apmc VARCHAR,
         apmc_norm VARCHAR,
+        -- Commodity information
         commodity VARCHAR,
         min_price DOUBLE,
         modal_price DOUBLE,
         max_price DOUBLE,
         commodity_arrivals DOUBLE,
         commodity_traded DOUBLE,
-        reported_date DATE NOT NULL,
+        -- Temporal dimension
         year INTEGER NOT NULL,
         month INTEGER NOT NULL,
         day INTEGER NOT NULL,
+        reported_date DATE NOT NULL,
+        -- Data quality flags
         has_nulls BOOLEAN DEFAULT FALSE,
         is_complete BOOLEAN DEFAULT TRUE,
         null_field_count INTEGER DEFAULT 0,
         record_hash VARCHAR NOT NULL,
+        -- Deduplication & versioning
         is_latest BOOLEAN DEFAULT TRUE,
         version INTEGER DEFAULT 1,
         superseded_by VARCHAR,
         superseded_at TIMESTAMP,
+        -- Ingestion tracking
         ingest_job_id VARCHAR NOT NULL,
         ingest_ts TIMESTAMP NOT NULL,
         source_row_number INTEGER,
+        -- Audit timestamps
         created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (file_id) REFERENCES enam_bronze_files(file_id)

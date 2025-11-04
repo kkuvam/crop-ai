@@ -20,15 +20,6 @@ CREATE TABLE IF NOT EXISTS enam_bronze_files (
     file_path VARCHAR NOT NULL,
     file_size_bytes BIGINT,
     
-    -- Geographic metadata (parsed from filename)
-    country VARCHAR DEFAULT 'IN',
-    state_name VARCHAR,
-    apmc_raw VARCHAR,
-    from pipeline.ingest_bronze_common import normalize_place_name, file_checksum, count_jsonl_rows, extract_year_month_from_path
-
-    apmc_norm VARCHAR,
-    commodity_name VARCHAR,
-    
     -- Temporal metadata
     year INTEGER,                                   -- data year
     month INTEGER,                                  -- data month (1-12)
@@ -99,12 +90,6 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
         original_filename VARCHAR NOT NULL,
         file_path VARCHAR NOT NULL,
         file_size_bytes BIGINT,
-        -- Geographic metadata
-        country VARCHAR DEFAULT 'IN',
-        state_name VARCHAR,
-        apmc_raw VARCHAR,
-        apmc_norm VARCHAR,
-        commodity_name VARCHAR,
         -- Temporal metadata
         year INTEGER,
         month INTEGER,
@@ -126,7 +111,6 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
     """
     indexes = [
         f"CREATE INDEX IF NOT EXISTS idx_checksum_enam ON {TABLE}(checksum);",
-        f"CREATE INDEX IF NOT EXISTS idx_apmc_norm_enam ON {TABLE}(apmc_norm);",
         f"CREATE INDEX IF NOT EXISTS idx_year_month_enam ON {TABLE}(year, month);",
         f"CREATE INDEX IF NOT EXISTS idx_ingest_job_enam ON {TABLE}(ingest_job_id);",
         f"CREATE INDEX IF NOT EXISTS idx_created_at_enam ON {TABLE}(created_at);",
@@ -145,26 +129,49 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
 # HELPER FUNCTIONS
 # ============================================================================
 
-def build_partition_path(apmc: Optional[str], state: Optional[str], year: int, month: int) -> str:
-    apmc_norm = normalize_place_name(apmc) if apmc else "unknown_apmc"
-    state_norm = normalize_place_name(state) if state else "unknown_state"
-    return f"apmc={apmc_norm}/state={state_norm}/year={year}/month={month:02d}"
+def build_partition_path(year: int, month: int) -> str:
+    """Build partition path using year and month."""
+    return f"year={year}/month={month:02d}"
 
 def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
+    """
+    Parse all metadata from a single file.
+    Returns dict with all fields ready for database insertion.
+    """
     start_time = time.time()
+    
+    # Basic file info
     fname = fpath.name
+    base = fname.rsplit('.', 1)[0]
+    parts = base.split('_')
     file_size = fpath.stat().st_size
     if fname.endswith('.jsonl.gz'):
-        data_format = 'jsonl'
+        data_format = 'jsonl'  # treat gzipped jsonl as jsonl
     elif fname.endswith('.jsonl'):
         data_format = 'jsonl'
     else:
         data_format = 'json'
+
+    # Only extract year, month, and day from file path/filename
     year, month = extract_year_month_from_path(fpath)
+    # Optionally extract day if needed
+    reported_date = None
+    
+    # Try to extract day from filename (e.g., YYYYMMDD or YYYY-MM-DD)
+    m = re.search(r'(\d{4})[-_]?([01]\d)[-_]?([0-3]\d)', fname)
+    if m:
+        try:
+            reported_date = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+        except Exception:
+            reported_date = None
+
+    # Checksum
     checksum = file_checksum(fpath)
+
+    # Read payload and count rows
     raw_payload = None
     row_count = 1
-    records = []
+
     if file_size > MAX_PAYLOAD_SIZE:
         logger.warning(f"File too large ({file_size} bytes), skipping payload: {fpath}")
         raw_payload = f"[PAYLOAD_TOO_LARGE: {file_size} bytes]"
@@ -174,54 +181,27 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
                 with gzip.open(fpath, 'rt', encoding='utf-8') as fh:
                     lines = fh.readlines()
                 row_count = len(lines)
-                raw_payload = '\n'.join([line.rstrip('\n') for line in lines])
-                for line in lines:
-                    try:
-                        records.append(json.loads(line))
-                    except Exception:
-                        continue
+                raw_payload = '\n'.join(lines)
             elif data_format == 'jsonl':
                 row_count = count_jsonl_rows(fpath)
                 with fpath.open('r', encoding='utf-8') as fh:
                     raw_payload = fh.read()
-                    fh.seek(0)
-                    for line in fh:
-                        try:
-                            records.append(json.loads(line))
-                        except Exception:
-                            continue
-            else:
+            else:  # json
                 with fpath.open('r', encoding='utf-8') as fh:
                     text = fh.read()
                 try:
                     j = json.loads(text)
-                    if isinstance(j, list):
-                        records = j
-                        row_count = len(j)
-                    else:
-                        records = [j]
-                        row_count = 1
+                    row_count = len(j) if isinstance(j, list) else 1
                 except json.JSONDecodeError:
                     logger.warning(f"Invalid JSON in {fpath}, treating as single row")
-                    records = []
                     row_count = 1
                 raw_payload = text
         except Exception as e:
             logger.error(f"Failed to read payload from {fpath}: {e}")
             raw_payload = f"[READ_ERROR: {str(e)}]"
 
-    # Extract metadata from first record (if available)
-    meta = records[0] if records else {}
-    state_name = meta.get("state")
-    apmc_raw = meta.get("apmc")
-    apmc_norm = normalize_place_name(apmc_raw)
-    commodity_name = meta.get("commodity")
-    # ...existing code...
-    created_at = meta.get("created_at")
-    status = meta.get("status")
-    commodity_uom = meta.get("Commodity_Uom")
-
-    partition_path = build_partition_path(apmc_raw, state_name, year, month)
+    # Partition path: just year/month (state/district)
+    partition_path = build_partition_path(year, month)
     duration_ms = int((time.time() - start_time) * 1000)
 
     return {
@@ -230,16 +210,9 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
         'original_filename': fname,
         'file_path': str(fpath.resolve()),
         'file_size_bytes': file_size,
-        'country': 'IN',
-        'state_name': state_name,
-        'apmc_raw': apmc_raw,
-        'apmc_norm': apmc_norm,
-        'commodity_name': commodity_name,
-        'created_at': created_at,
-        'status': status,
-        'commodity_uom': commodity_uom,
         'year': year,
         'month': month,
+        'reported_date': reported_date,
         'raw_payload': raw_payload,
         'row_count': row_count,
         'data_format': data_format,
@@ -280,14 +253,14 @@ def main():
     insert_sql = f"""
     INSERT INTO {TABLE} (
         file_id, checksum, original_filename, file_path, file_size_bytes,
-        country, state_name, apmc_raw, apmc_norm, commodity_name,
-        created_at, status, commodity_uom, year, month, raw_payload, row_count, data_format,
-        partition_path, ingest_job_id, ingest_ts, ingest_duration_ms, created_at_ts, updated_at_ts
+        year, month, reported_date,
+        raw_payload, row_count, data_format,
+        partition_path, ingest_job_id, ingest_ts, ingest_duration_ms,
+        created_at, updated_at
     ) VALUES (
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?
     )
     """
     existing_checksums = get_existing_checksums(con, TABLE)
@@ -322,17 +295,9 @@ def main():
                     metadata['original_filename'],
                     metadata['file_path'],
                     metadata['file_size_bytes'],
-                    metadata['country'],
-                    metadata['state_name'],
-                    metadata['apmc_raw'],
-                    metadata['apmc_norm'],
-                    metadata['commodity_name'],
-                # ...existing code...
-                    metadata['created_at'],
-                    metadata['status'],
-                    metadata['commodity_uom'],
                     metadata['year'],
                     metadata['month'],
+                    metadata['reported_date'],
                     metadata['raw_payload'],
                     metadata['row_count'],
                     metadata['data_format'],

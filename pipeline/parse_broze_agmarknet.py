@@ -13,36 +13,46 @@ Parse Agmarknet data from `agmarknet_bronze_files` table into `agmarknet_bronze_
 SCHEMA:
 -------
 CREATE TABLE IF NOT EXISTS agmarknet_bronze_rows (
+    -- Primary identification
     row_id VARCHAR PRIMARY KEY,
     file_id VARCHAR NOT NULL,
+    -- Geographic identifiers
     country VARCHAR DEFAULT 'IN',
     state_name VARCHAR,
     district_name VARCHAR,
     market_name VARCHAR,
     market_name_norm VARCHAR,
+    -- Commodity information
     commodity_name VARCHAR,
     commodity_group VARCHAR,
     variety VARCHAR,
     grade VARCHAR,
+
+    -- Temporal dimension
     reported_date DATE NOT NULL,
     year INTEGER NOT NULL,
     month INTEGER NOT NULL,
     day INTEGER NOT NULL,
+    -- Market data
     arrivals DOUBLE,
     min_price DOUBLE,
     max_price DOUBLE,
     modal_price DOUBLE,
+    -- Data quality flags
     has_nulls BOOLEAN DEFAULT FALSE,
     is_complete BOOLEAN DEFAULT TRUE,
     null_field_count INTEGER DEFAULT 0,
+    -- Deduplication & versioning
     record_hash VARCHAR NOT NULL,
     is_latest BOOLEAN DEFAULT TRUE,
     version INTEGER DEFAULT 1,
     superseded_by VARCHAR,
     superseded_at TIMESTAMP,
+    -- Ingestion tracking
     ingest_job_id VARCHAR NOT NULL,
     ingest_ts TIMESTAMP NOT NULL,
     source_row_number INTEGER,
+    -- Audit timestamps
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (file_id) REFERENCES agmarknet_bronze_files(file_id)

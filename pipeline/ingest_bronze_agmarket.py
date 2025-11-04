@@ -21,15 +21,6 @@ CREATE TABLE IF NOT EXISTS agmarknet_bronze_files (
     file_path VARCHAR NOT NULL,                     -- full resolved path
     file_size_bytes BIGINT,                         -- file size for monitoring
 
-    -- Metadata (parsed from filename/content)
-    country VARCHAR DEFAULT 'IN',                   -- e.g., 'IN' for India
-    state_name VARCHAR,                             -- e.g., 'Madhya Pradesh'
-    district_name VARCHAR,                          -- e.g., 'Umariya'
-    market_name_raw VARCHAR,                      -- original market name
-    market_name_norm VARCHAR,                     -- normalized market name
-    commodity_name VARCHAR,                         -- e.g., 'Wheat'
-    commodity_group VARCHAR,                        -- commodity group
-
     -- Temporal metadata
     year INTEGER,                                   -- data year
     month INTEGER,                                  -- data month (1-12)
@@ -106,15 +97,6 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
         file_path VARCHAR NOT NULL,
         file_size_bytes BIGINT,
         
-        -- Geographical metadata
-        country VARCHAR DEFAULT 'IN',
-        state_name VARCHAR,
-        district_name VARCHAR,
-        market_name_raw VARCHAR,
-        market_name_norm VARCHAR,
-        commodity_name VARCHAR,
-        commodity_group VARCHAR,
-        
         -- Temporal metadata
         year INTEGER,
         month INTEGER,
@@ -140,7 +122,6 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
     """
     indexes = [
         f"CREATE INDEX IF NOT EXISTS idx_checksum ON {TABLE}(checksum);",
-        f"CREATE INDEX IF NOT EXISTS idx_market_norm ON {TABLE}(market_name_norm);",
         f"CREATE INDEX IF NOT EXISTS idx_year_month ON {TABLE}(year, month);",
         f"CREATE INDEX IF NOT EXISTS idx_ingest_job ON {TABLE}(ingest_job_id);",
         f"CREATE INDEX IF NOT EXISTS idx_created_at ON {TABLE}(created_at);",
@@ -159,19 +140,10 @@ def create_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
 # HELPER FUNCTIONS
 # ============================================================================
 
-def build_partition_path(
-    market_name: Optional[str],
-    state_name: Optional[str],
-    district_name: Optional[str],
-    year: int,
-    month: int
-) -> str:
-    """Build partition path using market, state, district, year, and month."""
-    market_norm = normalize_place_name(market_name) if market_name else "unknown_market"
-    state_norm = normalize_place_name(state_name) if state_name else "unknown_state"
-    district_norm = normalize_place_name(district_name) if district_name else "unknown_district"
-    return f"market={market_norm}/state={state_norm}/district={district_norm}/year={year}/month={month:02d}"
-
+def build_partition_path(year: int, month: int) -> str:
+    """Build partition path using year and month."""
+    return f"year={year}/month={month:02d}"
+    
 
 def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
     """
@@ -240,7 +212,7 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
             logger.error(f"Failed to read payload from {fpath}: {e}")
             raw_payload = f"[READ_ERROR: {str(e)}]"
 
-    # Partition path: just year/month (no market/state/district)
+    # Partition path: just year/month (year/month only)
     partition_path = f"year={year}/month={month:02d}"
     duration_ms = int((time.time() - start_time) * 1000)
 
@@ -250,13 +222,6 @@ def parse_file_metadata(fpath: Path) -> Dict[str, Any]:
         'original_filename': fname,
         'file_path': str(fpath.resolve()),
         'file_size_bytes': file_size,
-        'country': None,
-        'state_name': None,
-        'district_name': None,
-        'market_name_raw': None,
-        'market_name_norm': None,
-        'commodity_name': None,
-        'commodity_group': None,
         'year': year,
         'month': month,
         'reported_date': reported_date,
@@ -312,14 +277,12 @@ def main():
     insert_sql = f"""
     INSERT INTO {TABLE} (
         file_id, checksum, original_filename, file_path, file_size_bytes,
-        country, state_name, district_name, market_name_raw, market_name_norm, commodity_name, commodity_group,
         year, month, reported_date,
         raw_payload, row_count, data_format,
         partition_path, ingest_job_id, ingest_ts, ingest_duration_ms,
         created_at, updated_at
     ) VALUES (
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?
     )
@@ -336,7 +299,7 @@ def main():
         con.close()
         return
     
-    # Walk through files
+    # Walk through file s
     logger.info(f"Scanning files in {DATA_DIR}")
     
     for root, dirs, files in os.walk(DATA_DIR):
@@ -371,13 +334,6 @@ def main():
                     metadata['original_filename'],
                     metadata['file_path'],
                     metadata['file_size_bytes'],
-                    metadata['country'],
-                    metadata['state_name'],
-                    metadata['district_name'],
-                    metadata['market_name_raw'],
-                    metadata['market_name_norm'],
-                    metadata['commodity_name'],
-                    metadata['commodity_group'],
                     metadata['year'],
                     metadata['month'],
                     metadata['reported_date'],

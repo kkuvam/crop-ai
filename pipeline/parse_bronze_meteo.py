@@ -13,20 +13,29 @@ Parse Open-Meteo data from `openmeteo_bronze_files` table into `openmeteo_bronze
 SCHEMA:
 -------
 CREATE TABLE IF NOT EXISTS openmeteo_bronze_rows (
+    -- Primary identifiers
     row_id VARCHAR PRIMARY KEY,
     file_id VARCHAR NOT NULL,
+    
+    -- Geographic identifiers
     country VARCHAR DEFAULT 'IN',
     state VARCHAR,
     district VARCHAR,
     place_name_norm VARCHAR,
+    
+    -- Coordinates
     lat DOUBLE,
     lon DOUBLE,
     lat_tile DOUBLE,
     lon_tile DOUBLE,
-    date DATE NOT NULL,
+    
+    --Temodal metadata
     year INTEGER NOT NULL,
     month INTEGER NOT NULL,
     day INTEGER NOT NULL,
+    reported_date DATE NOT NULL,
+    
+    -- Content fields
     temperature_2m_mean DOUBLE,
     temperature_2m_max DOUBLE,
     temperature_2m_min DOUBLE,
@@ -43,6 +52,8 @@ CREATE TABLE IF NOT EXISTS openmeteo_bronze_rows (
     wind_direction_10m_dominant DOUBLE,
     rain_sum DOUBLE,
     precipitation_sum DOUBLE,
+    
+    -- Data quality flags
     has_nulls BOOLEAN DEFAULT FALSE,
     is_complete BOOLEAN DEFAULT TRUE,
     null_field_count INTEGER DEFAULT 0,
@@ -51,9 +62,13 @@ CREATE TABLE IF NOT EXISTS openmeteo_bronze_rows (
     version INTEGER DEFAULT 1,
     superseded_by VARCHAR,
     superseded_at TIMESTAMP,
+    
+    -- Ingestion tracking
     ingest_job_id VARCHAR NOT NULL,
     ingest_ts TIMESTAMP NOT NULL,
     source_row_number INTEGER,
+    
+    -- Audit timestamps
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (file_id) REFERENCES openmeteo_bronze_files(file_id)
@@ -119,10 +134,10 @@ def create_rows_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
         lon_tile DOUBLE,
         
         -- Temporal dimension
-        date DATE NOT NULL,
         year INTEGER NOT NULL,
         month INTEGER NOT NULL,
         day INTEGER NOT NULL,
+        reported_date DATE NOT NULL,
         
         -- Weather measurements
         temperature_2m_mean DOUBLE,
@@ -171,9 +186,9 @@ def create_rows_table_if_not_exists(con: duckdb.DuckDBPyConnection) -> None:
     # Create indexes for performance
     indexes = [
         f"CREATE INDEX IF NOT EXISTS idx_rows_file_id ON {ROWS_TABLE}(file_id);",
-        f"CREATE INDEX IF NOT EXISTS idx_rows_date ON {ROWS_TABLE}(date);",
-        f"CREATE INDEX IF NOT EXISTS idx_rows_place_date ON {ROWS_TABLE}(place_name_norm, date);",
-        f"CREATE INDEX IF NOT EXISTS idx_rows_geo_date ON {ROWS_TABLE}(lat_tile, lon_tile, date);",
+        f"CREATE INDEX IF NOT EXISTS idx_rows_reported_date ON {ROWS_TABLE}(reported_date);",
+        f"CREATE INDEX IF NOT EXISTS idx_rows_place_date ON {ROWS_TABLE}(place_name_norm, reported_date);",
+        f"CREATE INDEX IF NOT EXISTS idx_rows_geo_date ON {ROWS_TABLE}(lat_tile, lon_tile, reported_date);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_year_month ON {ROWS_TABLE}(year, month);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_ingest_job ON {ROWS_TABLE}(ingest_job_id);",
         f"CREATE INDEX IF NOT EXISTS idx_rows_record_hash ON {ROWS_TABLE}(record_hash);",
@@ -367,7 +382,7 @@ def process_file_records(
     INSERT INTO {ROWS_TABLE} (
         row_id, file_id, country, state, district, place_name_norm,
         lat, lon, lat_tile, lon_tile,
-        date, year, month, day,
+        reported_date, year, month, reported_day,
         temperature_2m_mean, temperature_2m_max, temperature_2m_min,
         cloud_cover_mean,
         relative_humidity_2m_max, relative_humidity_2m_min, relative_humidity_2m_mean,
