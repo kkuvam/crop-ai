@@ -7,12 +7,12 @@ import calendar
 import time
 import argparse
 from datetime import datetime, date, timedelta
+from duckdb import df
 import pandas as pd
 from typing import List, Optional, Literal
 from collections import deque
 from time import sleep
-import openmeteo_requests
-import requests_cache
+import requests
 from retry_requests import retry
 
 # --- Tor SOCKS5 Proxy (Tor Browser default) ---
@@ -73,14 +73,6 @@ def set_cache(key: str, file_path: str = "../data/meteo/.open-meteo") -> None:
     with open(file_path, "a", encoding="utf-8") as f:
         f.write(key + "\n")
 
-def build_openmeteo_client(cache_path: str = ".cache") -> openmeteo_requests.Client:
-    cache_session = requests_cache.CachedSession(
-        cache_path, 
-        expire_after=-1,
-        proxies=PROXIES,        # ✅ route through Tor
-    )
-    retry_session = retry(cache_session, retries=5, backoff_factor=0.2)
-    return openmeteo_requests.Client(session=retry_session)
 
 def normalize(text: str) -> str:
     """Helper to normalize names."""
@@ -115,8 +107,7 @@ def add_suffix(filename: str, suffix: str) -> str:
     base, ext = os.path.splitext(filename)
     return f"{base}_{suffix}{ext}"
 
-def fetch_daily(client: openmeteo_requests.Client,
-                url: str,
+def fetch_daily(url: str,
                 lat: float,
                 lon: float,
                 start_date: date,
@@ -133,34 +124,45 @@ def fetch_daily(client: openmeteo_requests.Client,
         "daily": DAILY_VARS, "timezone": timezone,
     }
     
-    responses = client.weather_api(url, params=params )
-    if not responses:
+    try:
+        responses = requests.get(url, params=params, proxies=PROXIES, timeout=60)
+        responses.raise_for_status()
+        data = responses.json()
+    except Exception as e:
+        print(f"⚠️ Error fetching data for {lat}, {lon}: {e}")
         return pd.DataFrame(columns=["date", *DAILY_VARS])
-    daily = responses[0].Daily()
 
-    # Build UTC series -> convert to local tz -> take local calendar date
-    t_start_utc = pd.to_datetime(daily.Time(), unit="s", utc=True)
-    t_end_utc = pd.to_datetime(daily.TimeEnd(), unit="s", utc=True)
-    interval_s = int(daily.Interval())
+    # --- Save response safely ---
+    # try:
+    #     with open("debug.json", "w", encoding="utf-8") as f:
+    #         json.dump(data, f, indent=2, ensure_ascii=False)
+    #     print(f"✅ Saved raw response to: debug.json")
+    # except Exception as e:
+    #     print(f"⚠️ Could not save JSON to debug.json: {e}")
 
-    # Create UTC range, then convert to local tz and take just the calendar date
-    time_utc = pd.date_range(start=t_start_utc, end=t_end_utc,
-                             freq=pd.Timedelta(seconds=interval_s), inclusive="left")
-    time_local = time_utc.tz_convert(timezone)
-    date_local = time_local.normalize().date  # array of python date objects
+    # input("Enter to continue...")  # DEBUG PAUSE
 
-    daily_data = {"date": pd.Series(date_local)}
+    daily = data.get("daily", {})
+    if not daily or "time" not in daily:
+        return pd.DataFrame(columns=["date", *DAILY_VARS])
+    
+    # Convert ISO8601 strings to datetime
+    dates = pd.to_datetime(daily["time"])
+    daily_data = {"date": dates}
 
     # Assign in the same order
     for i, key in enumerate(DAILY_VARS):
-        daily_data[key] = daily.Variables(i).ValuesAsNumpy()
+        daily_data[key] = daily.get(key, [None] * len(dates))
 
     df = pd.DataFrame(daily_data)
     
     # Final clamp (defensive)
-    df = df[(df["date"] >= start_date) & (df["date"] <= end_date)].reset_index(drop=True)
+    df = df[(df["date"].dt.date >= start_date) & (df["date"].dt.date <= end_date)]
 
-    return df
+    # print(df)
+    # input("Enter to continue...")  # DEBUG PAUSE
+    
+    return df.reset_index(drop=True)
 
 def write_partitioned_by_month(
     df: pd.DataFrame,
@@ -205,7 +207,6 @@ def save_openmeteo_month(
     mode: Literal["archive", "forecast"] = "archive",
     base_dir: str = "../data/meteo",
     timezone: str = "Asia/Kolkata",
-    client: Optional[openmeteo_requests.Client] = None,
     horizon_days: int = 15,   # only used by forecast & hybrid
 ) -> str:
     """
@@ -237,19 +238,17 @@ def save_openmeteo_month(
     if start_date_local > today_local:
         return []
 
-    # Setup Open-Meteo client with cache + retries
-    openmeteo = client or build_openmeteo_client()
     
     if mode == "archive":
         start = start_date_local
         end = end_date_local
-        df = fetch_daily(openmeteo, ARCHIVE_URL, lat, lon, start, end, timezone)
+        df = fetch_daily(ARCHIVE_URL, lat, lon, start, end, timezone)
         return write_partitioned_by_month(df, base_dir, location_meta)
 
     elif mode == "forecast":
         start = today_local  # today onwards
         end = today_local + timedelta(days=horizon_days)
-        df = fetch_daily(openmeteo, FORECAST_URL, lat, lon, start, end, timezone)
+        df = fetch_daily(FORECAST_URL, lat, lon, start, end, timezone)
         return write_partitioned_by_month(df, base_dir, location_meta, filename_suffix="forecast")
 
     else:
@@ -278,7 +277,6 @@ def throttle():
 
 def run_archive(year: int):
     """Run archive mode for the specified year."""
-    client = build_openmeteo_client()
     locs = load_jsonl("../data/agmarknet/mandies_20250907.jsonl")
     cache = get_cache()
     print(f"Processing {len(locs)} records for archive (year {year})...")
@@ -303,7 +301,6 @@ def run_archive(year: int):
                     location_meta=loc,
                     year=year,
                     base_dir="../data/meteo",
-                    client=client,
                     mode="archive"
                 )
                 if out_path:  # Only cache if successfully saved
